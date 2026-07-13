@@ -61,5 +61,27 @@ void
 memdump(char *fmt, char *data)
 {
   // Your code here.
-
+  for(; *fmt != '\0'; fmt ++){
+    if(*fmt == 'i'){
+      printf("%d\n", *(int*)data);
+      data += sizeof(int);
+    } else if (*fmt == 'p'){
+      printf("%lx\n", *(uint64*)data);
+      data += sizeof(uint64);
+    } else if (*fmt == 'h'){
+      printf("%d\n", *(short *)data);
+      data += sizeof(short);
+    } else if (*fmt == 'c') {
+      printf("%c\n", *data);
+      data += 1;
+    } else if (*fmt == 's') {
+      printf("%s\n", *(char**)data);
+      data += sizeof(char *);
+    } else if (*fmt == 'S') {
+      printf("%s\n", data);
+      data += strlen(data) + 1;
+    } else {
+      fprintf(2, "memdump: unknown format %c\n", *fmt);
+    }
+  }
 }
