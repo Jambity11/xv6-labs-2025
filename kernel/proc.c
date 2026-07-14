@@ -124,6 +124,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->syscall_mask = 0;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -275,6 +276,9 @@ kfork(void)
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
+
+  // inherit syscall restrictions.
+  np->syscall_mask = p->syscall_mask;
 
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;

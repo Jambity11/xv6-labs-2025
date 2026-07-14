@@ -1,0 +1,8 @@
+1. The function that called syscall() was usertrap().
+
+2. p->trapframe->a7 was 0x11
+   It is the system-call number stored in register a7.
+   According to kernel/syscall.h, it represents SYS_exe
+
+3. The previous CPU mode was user mp/x p->trapframe->a7mode.
+   The SPP bit of sstatus was zero.
