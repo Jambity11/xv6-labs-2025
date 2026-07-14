@@ -135,19 +135,19 @@ pathname_exception(struct proc *p, int num)
 {
   char path[MAXPATH];
 
-  // "-" means there is no allowed pathname.
-  if(strcmp(p->allowed_path, "-") == 0)
+  // "-" 表示没有允许的例外路径。
+  if(strncmp(p->allowed_path, "-", MAXPATH) == 0)
     return 0;
 
-  // Only open and exec can receive a pathname exception.
+  // 只有 open 和 exec 可以使用路径例外。
   if(num != SYS_open && num != SYS_exec)
     return 0;
 
-  // The pathname is argument 0 for both open and exec.
+  // open 和 exec 的第 0 个参数都是路径。
   if(argstr(0, path, MAXPATH) < 0)
     return 0;
 
-  return strcmp(path, p->allowed_path) == 0;
+  return strncmp(path, p->allowed_path, MAXPATH) == 0;
 }
 
 void
@@ -173,7 +173,7 @@ syscall(void)
 
     p->trapframe->a0 = syscalls[num]();
   } else {
-    printk("%d %s: unknown sys call %d\n",
+    printf("%d %s: unknown sys call %d\n",
            p->pid, p->name, num);
     p->trapframe->a0 = -1;
   }
