@@ -130,6 +130,26 @@ static uint64 (*syscalls[])(void) = {
 [SYS_interpose] sys_interpose,
 };
 
+static int
+pathname_exception(struct proc *p, int num)
+{
+  char path[MAXPATH];
+
+  // "-" means there is no allowed pathname.
+  if(strcmp(p->allowed_path, "-") == 0)
+    return 0;
+
+  // Only open and exec can receive a pathname exception.
+  if(num != SYS_open && num != SYS_exec)
+    return 0;
+
+  // The pathname is argument 0 for both open and exec.
+  if(argstr(0, path, MAXPATH) < 0)
+    return 0;
+
+  return strcmp(path, p->allowed_path) == 0;
+}
+
 void
 syscall(void)
 {
@@ -137,18 +157,24 @@ syscall(void)
   struct proc *p = myproc();
 
   num = p->trapframe->a7;
-  if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
-    // Use num to lookup the system call function for num, call it,
-    // and store its return value in p->trapframe->a0
-    if(p->syscall_mask & (1ULL << num)){
+
+  if(num > 0 &&
+     num < NELEM(syscalls) &&
+     syscalls[num]){
+
+    int blocked =
+      (p->syscall_mask & (1ULL << num)) != 0;
+
+    if(blocked &&
+       !pathname_exception(p, num)){
       p->trapframe->a0 = -1;
       return;
     }
 
     p->trapframe->a0 = syscalls[num]();
   } else {
-    printf("%d %s: unknown sys call %d\n",
-            p->pid, p->name, num);
+    printk("%d %s: unknown sys call %d\n",
+           p->pid, p->name, num);
     p->trapframe->a0 = -1;
   }
 }
