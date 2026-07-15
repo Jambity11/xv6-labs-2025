@@ -8,6 +8,7 @@
 #include "spinlock.h"
 #include "riscv.h"
 #include "defs.h"
+#define NSUPERPAGE 32
 
 void freerange(void *pa_start, void *pa_end);
 
@@ -23,11 +24,35 @@ struct {
   struct run *freelist;
 } kmem;
 
+#ifdef LAB_PGTBL
+struct {
+  struct spinlock lock;
+  struct run *freelist;
+} supermem;
+#endif
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+#ifdef LAB_PGTBL
+  initlock(&supermem.lock, "supermem");
+
+  uint64 super_start = SUPERPGROUNDUP((uint64)end);
+  uint64 super_end = super_start + NSUPERPAGE * SUPERPGSIZE;
+
+  if(super_end > PHYSTOP)
+    panic("kinit: not enough memory for superpages");
+
+  freerange(end, (void*)super_start);
+
+  for(uint64 p = super_start; p + SUPERPGSIZE <= super_end; p += SUPERPGSIZE)
+    superfree((void*)p);
+
+  freerange((void*)super_end, (void*)PHYSTOP);
+#else
   freerange(end, (void*)PHYSTOP);
+#endif
 }
 
 void
@@ -80,3 +105,40 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
+
+#ifdef LAB_PGTBL
+void
+superfree(void *pa)
+{
+  struct run *r;
+
+  if(((uint64)pa % SUPERPGSIZE) != 0 || (char*)pa < end ||
+     (uint64)pa + SUPERPGSIZE > PHYSTOP)
+    panic("superfree");
+
+  memset(pa, 1, SUPERPGSIZE);
+
+  r = (struct run*)pa;
+
+  acquire(&supermem.lock);
+  r->next = supermem.freelist;
+  supermem.freelist = r;
+  release(&supermem.lock);
+}
+
+void *
+superalloc(void)
+{
+  struct run *r;
+
+  acquire(&supermem.lock);
+  r = supermem.freelist;
+  if(r)
+    supermem.freelist = r->next;
+  release(&supermem.lock);
+
+  if(r)
+    memset((char*)r, 5, SUPERPGSIZE);
+  return (void*)r;
+}
+#endif
