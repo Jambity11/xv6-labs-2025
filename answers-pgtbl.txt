@@ -1,0 +1,13 @@
+前若干项对应 pgtbltest 用户进程低地址处的代码页。以 va 0x0 为例，
+perm 为 0x5b，即 PTE_V、PTE_R、PTE_X、PTE_U 和 PTE_A 被置位。
+这说明该页有效，用户态可访问，可读可执行，但不可写，符合用户代码页的权限。
+
+pte 和 perm 均为 0 的项表示该虚拟页没有映射。由于没有 PTE_V，
+用户程序访问这些地址会触发缺页异常。
+
+靠近地址空间顶部的 TRAPFRAME 页权限为 0xc7，包含 PTE_V、PTE_R、
+PTE_W、PTE_A 和 PTE_D，但没有 PTE_U。因此该页在页表中有效，
+但普通用户态代码不能直接访问，它用于 trap 过程中保存寄存器状态。
+
+最高地址处的 TRAMPOLINE 页权限为 0x4b，包含 PTE_V、PTE_R、PTE_X 和 PTE_A，
+没有 PTE_W 和 PTE_U。它映射 trampoline 代码，用于用户态和内核态之间的切换。
