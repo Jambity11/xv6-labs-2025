@@ -122,11 +122,24 @@ allocproc(void)
   return 0;
 
 found:
+  p->alarm_interval = 0;
+  p->alarm_ticks = 0;
+  p->alarm_handler = 0;
+  p->alarm_active = 0;
+  p->alarm_trapframe = 0;
+
   p->pid = allocpid();
   p->state = USED;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  // allocate a alarm_trapframe
+  if((p->alarm_trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
     release(&p->lock);
     return 0;
@@ -158,9 +171,22 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+
+  // alarm
+  if(p->alarm_trapframe)
+    kfree((void*)p->alarm_trapframe);
+  p->alarm_trapframe = 0;
+
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+
+  // alarm
+  p->alarm_interval = 0;
+  p->alarm_ticks = 0;
+  p->alarm_handler = 0;
+  p->alarm_active = 0;
+
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -275,6 +301,12 @@ kfork(void)
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
+
+  // alarm
+  np->alarm_interval = p->alarm_interval;
+  np->alarm_ticks = 0;
+  np->alarm_handler = p->alarm_handler;
+  np->alarm_active = 0;
 
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
