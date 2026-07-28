@@ -1,0 +1,16 @@
+1. Function arguments are passed in registers a0 through a7. In main's call to printf, the value 13 is in a2, because a0 holds the format string and a1 holds f(8)+1, which is optimized to 12.
+
+2. There is no actual call to f in main in the generated assembly. The compiler optimized f(8)+1 into the constant 12. There is also no call from main to g. The compiler may inline or constant-fold these small functions.
+
+3. printf is located at 0x708. This is the address printed before the <printf> label in user/call.asm.
+
+4. Just after the jal/jalr to printf in main, ra contains 0x46, the address of the instruction immediately after the call to printf.
+
+5. The output is:
+   He110 World
+
+   57616 is 0xe110. Since RISC-V is little-endian, the integer 0x00646c72 is stored in memory as bytes 72 6c 64 00, which is the string "rld". Together with "Wo" this prints "World".
+
+   If the machine were big-endian, i should be 0x726c6400 to place bytes 72 6c 64 00 in memory. 57616 would not need to change.
+
+6. It prints x=3 y=<some unpredictable value>. The second value is not well-defined because the format string asks printf for two integer arguments, but the call provides only one. printf reads whatever value happens to be in the next argument register.

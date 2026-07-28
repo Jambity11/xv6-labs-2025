@@ -25,6 +25,28 @@ static struct {
 
 static char digits[] = "0123456789abcdef";
 
+void
+backtrace(void)
+{
+  uint64 fp = r_fp(); // 读取当前函数的frame pointer
+
+  // 算出当前内核栈页的范围
+  uint64 bottom = PGROUNDDOWN(fp);
+  uint64 top = PGROUNDUP(fp);
+
+  // 打印题目要求格式
+  printf("backtrace:\n");
+
+  while(fp >= bottom && fp < top){
+    // 一个地址占8位
+    printf("%p\n", (void *)*(uint64 *)(fp - 8)); // fp - 8 是返回地址
+    // 返回地址（一个函数执行结束后，程序应该执行的下一条指令的地址）（函数调用之前，程序记住回来后从哪里继续）
+
+    fp = *(uint64 *)(fp - 16); // fp - 16 是调用者的 fp
+  }
+}
+
+
 static void
 printint(long long xx, int base, int sign)
 {
@@ -133,12 +155,17 @@ printf(char *fmt, ...)
   return 0;
 }
 
+
+// 内核遇到无法继续运行的错误时调用
 void
 panic(char *s)
 {
   panicking = 1;
   printf("panic: ");
   printf("%s\n", s);
+
+  backtrace();
+
   panicked = 1; // freeze uart output from other CPUs
   for(;;)
     ;
