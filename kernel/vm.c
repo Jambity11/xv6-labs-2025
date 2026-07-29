@@ -299,28 +299,83 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       continue;   // page table entry hasn't been allocated
     if((*pte & PTE_V) == 0)
       continue;   // physical page hasn't been allocated
+
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+
+    if(flags & PTE_W){
+      flags = (flags & ~PTE_W) | PTE_COW;
+      *pte = PA2PTE(pa) | flags;
     }
+
+    if(mappages(new, i, PGSIZE, pa, flags) != 0)
+      goto err;
+
+    kaddref((void*)pa);
   }
+
+  sfence_vma();
   return 0;
 
  err:
+  sfence_vma();
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
+}
+
+// 引用计数 > 1：
+//   说明这页还被别的进程共享。
+//   必须分配新页，复制旧内容，当前进程改指向新页。
+
+// 引用计数 == 1：
+//   说明其实只有当前进程还在用。
+//   不需要复制，直接把 PTE_W 加回来，清掉 PTE_COW。
+uint64
+cowalloc(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa;
+  uint64 mem;
+  uint flags;
+
+  if(va >= MAXVA)
+    return 0;
+
+  va = PGROUNDDOWN(va);
+
+  pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    return 0;
+  if((*pte & (PTE_V | PTE_U | PTE_COW)) != (PTE_V | PTE_U | PTE_COW))
+    return 0;
+
+  pa = PTE2PA(*pte);
+  flags = PTE_FLAGS(*pte);
+
+  if(krefcnt((void*)pa) == 1){
+    *pte = PA2PTE(pa) | ((flags | PTE_W) & ~PTE_COW);
+    sfence_vma();
+    return pa;
+  }
+
+  mem = (uint64)kalloc();
+  if(mem == 0)
+    return 0;
+
+  memmove((void*)mem, (void*)pa, PGSIZE);
+
+  *pte = PA2PTE(mem) | ((flags | PTE_W) & ~PTE_COW);
+  sfence_vma();
+
+  kfree((void*)pa);
+
+  return mem;
 }
 
 // mark a PTE invalid for user access.
@@ -358,6 +413,17 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     }
 
     pte = walk(pagetable, va0, 0);
+    if(pte == 0)
+      return -1;
+
+    if(*pte & PTE_COW){
+      if((pa0 = cowalloc(pagetable, va0)) == 0)
+        return -1;
+      pte = walk(pagetable, va0, 0);
+      if(pte == 0)
+        return -1;
+    }
+
     // forbid copyout over read-only user text pages.
     if((*pte & PTE_W) == 0)
       return -1;
