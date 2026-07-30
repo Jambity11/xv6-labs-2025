@@ -9,6 +9,8 @@
 
 #define TX_RING_SIZE 16
 static struct tx_desc tx_ring[TX_RING_SIZE] __attribute__((aligned(16)));
+static char *tx_bufs[TX_RING_SIZE]; // tx_bufs[i] 保存 tx_ring[i] 当前正在发送或刚发送完成的 buffer。
+
 
 #define RX_RING_SIZE 16
 static struct rx_desc rx_ring[RX_RING_SIZE] __attribute__((aligned(16)));
@@ -104,8 +106,42 @@ e1000_transmit(char *buf, int len)
   // return -1 on failure (e.g., there is no descriptor available)
   // so that the caller knows to free buf.
   //
+  int idx;
+  struct tx_desc *desc;
 
-  
+  acquire(&e1000_lock);
+
+  // E1000有两个重要的位置：head tail
+  // head: 网卡正在处理哪里
+  // tail: 操作系统放新任务到哪里
+
+  idx = regs[E1000_TDT]; // tail 指向下一个可尝试使用的发送descriptor
+  desc = &tx_ring[idx];
+
+  if((desc->status & E1000_TXD_STAT_DD) == 0){ // 检查这个descriptor是否已经done，DD位为1说明处理完这个位置，OS可以重新使用它
+    release(&e1000_lock);
+    return -1;
+  }
+
+  if(tx_bufs[idx]){ // 如果这个 descriptor 上一次挂过一个 buffer，现在 descriptor 已经 DD，说明网卡发送完成，可以释放旧 buffer。
+    kfree(tx_bufs[idx]);
+    tx_bufs[idx] = 0;
+  }
+
+  desc->addr = (uint64)buf;
+  desc->length = len;
+  desc->cso = 0;
+  desc->cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS;
+  desc->status = 0;
+  desc->css = 0;
+  desc->special = 0;
+
+  tx_bufs[idx] = buf;
+
+  regs[E1000_TDT] = (idx + 1) % TX_RING_SIZE;
+
+  release(&e1000_lock);
+
   return 0;
 }
 
@@ -118,7 +154,33 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver a buf for each packet (using net_rx()).
   //
+  // 从 RDT 后面的 descriptor 开始看
+  // 只要 DD 位为 1，就说明这个 descriptor 收到了一个 packet
+  // 把 packet buffer 交给 net_rx()
+  // 然后给这个 descriptor 补一个新的空 buffer
+  // 清掉 status
+  // 更新 RDT
+  int idx;
 
+  idx = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+
+  while(rx_ring[idx].status & E1000_RXD_STAT_DD){
+    char *buf = (char *)rx_ring[idx].addr;
+    int len = rx_ring[idx].length;
+
+    char *newbuf = kalloc();
+    if(newbuf == 0)
+      break;
+
+    rx_ring[idx].addr = (uint64)newbuf;
+    rx_ring[idx].status = 0;
+
+    regs[E1000_RDT] = idx;
+
+    net_rx(buf, len);
+
+    idx = (idx + 1) % RX_RING_SIZE;
+  }
 }
 
 void
