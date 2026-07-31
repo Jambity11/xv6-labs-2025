@@ -121,32 +121,61 @@ release(struct spinlock *lk)
 }
 
 #ifdef LAB_LOCK
+
+#define RW_WRITER 0x80000000U
+#define RW_READERS 0x7fffffffU
+
 static void
 read_acquire_inner(struct rwspinlock *rwlk)
 {
-  // Replace this with your implementation.
-  acquire(&rwlk->l);
+  for(;;){
+    while(__atomic_load_n(&rwlk->waiting_writers, __ATOMIC_SEQ_CST) ||
+          (__atomic_load_n(&rwlk->state, __ATOMIC_SEQ_CST) & RW_WRITER))
+      ;
+
+    uint s = __atomic_load_n(&rwlk->state, __ATOMIC_SEQ_CST);
+
+    if((s & RW_WRITER) == 0){
+      if(__sync_bool_compare_and_swap(&rwlk->state, s, s + 1)){
+        if(__atomic_load_n(&rwlk->waiting_writers, __ATOMIC_SEQ_CST) == 0)
+          return;
+
+        __sync_fetch_and_sub(&rwlk->state, 1);
+      }
+    }
+  }
 }
 
 static void
 read_release_inner(struct rwspinlock *rwlk)
 {
-  // Replace this with your implementation.
-  release(&rwlk->l);
+  for(;;){
+    uint s = __atomic_load_n(&rwlk->state, __ATOMIC_SEQ_CST);
+
+    if((s & RW_WRITER) || (s & RW_READERS) == 0)
+      panic("read_release");
+
+    if(__sync_bool_compare_and_swap(&rwlk->state, s, s - 1))
+      return;
+  }
 }
 
 static void
 write_acquire_inner(struct rwspinlock *rwlk)
 {
-  // Replace this with your implementation.
-  acquire(&rwlk->l);
+  __sync_fetch_and_add(&rwlk->waiting_writers, 1);
+
+  while(__sync_bool_compare_and_swap(&rwlk->state, 0, RW_WRITER) == 0)
+    ;
+
+  __sync_fetch_and_sub(&rwlk->waiting_writers, 1);
 }
 
 static void
 write_release_inner(struct rwspinlock *rwlk)
 {
-  // Replace this with your implementation.
-  release(&rwlk->l);
+  if(__sync_bool_compare_and_swap(&rwlk->state, RW_WRITER, 0) == 0)
+    panic("write_release");
 }
 
 void
@@ -180,8 +209,8 @@ write_release(struct rwspinlock *rwlk)
 void
 initrwlock(struct rwspinlock *rwlk)
 {
-  // Replace this with your implementation.
-  initlock(&rwlk->l, "rwlk");
+  rwlk->state = 0;
+  rwlk->waiting_writers = 0;
 }
 
 // Test rwspinlock implementation.
