@@ -63,27 +63,53 @@ bzero(int dev, int bno)
 
 // Allocate a zeroed disk block.
 // returns 0 if out of disk space.
+// Allocate a zeroed disk block.
+// returns 0 if out of disk space.
 static uint
 balloc(uint dev)
 {
-  int b, bi, m;
+  static uint next = 0;
+  uint b, base, begin, end;
+  int bi, m;
   struct buf *bp;
 
-  bp = 0;
-  for(b = 0; b < sb.size; b += BPB){
-    bp = bread(dev, BBLOCK(b, sb));
-    for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
-      m = 1 << (bi % 8);
-      if((bp->data[bi/8] & m) == 0){  // Is block free?
-        bp->data[bi/8] |= m;  // Mark block in use.
-        log_write(bp);
-        brelse(bp);
-        bzero(dev, b + bi);
-        return b + bi;
-      }
+  for(int pass = 0; pass < 2; pass++){
+    if(pass == 0){
+      begin = next;
+      end = sb.size;
+    } else {
+      begin = 0;
+      end = next;
     }
-    brelse(bp);
+
+    for(b = begin; b < end; ){
+      base = (b / BPB) * BPB;
+      bp = bread(dev, BBLOCK(base, sb));
+
+      for(bi = b - base;
+          bi < BPB && base + bi < end && base + bi < sb.size;
+          bi++){
+        m = 1 << (bi % 8);
+        if((bp->data[bi/8] & m) == 0){
+          bp->data[bi/8] |= m;
+          log_write(bp);
+          brelse(bp);
+
+          bzero(dev, base + bi);
+
+          next = base + bi + 1;
+          if(next >= sb.size)
+            next = 0;
+
+          return base + bi;
+        }
+      }
+
+      brelse(bp);
+      b = base + BPB;
+    }
   }
+
   printf("balloc: out of blocks\n");
   return 0;
 }
