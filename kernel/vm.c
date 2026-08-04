@@ -7,6 +7,9 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "fcntl.h"
 
 /*
  * the kernel's page table.
@@ -455,20 +458,75 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
   uint64 mem;
   struct proc *p = myproc();
 
-  if (va >= p->sz)
+  if(va >= MAXVA)
     return 0;
+
   va = PGROUNDDOWN(va);
-  if(ismapped(pagetable, va)) {
+
+  if(ismapped(pagetable, va))
     return 0;
+
+  if(va < p->sz){
+    mem = (uint64) kalloc();
+    if(mem == 0)
+      return 0;
+    memset((void *) mem, 0, PGSIZE);
+    if(mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0){
+      kfree((void *)mem);
+      return 0;
+    }
+    return mem;
   }
+
+
+  struct vma *v = 0;
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used && va >= p->vmas[i].addr && va < p->vmas[i].addr + p->vmas[i].len){
+      v = &p->vmas[i];
+      break;
+    }
+  }
+
+  if(v == 0)
+    return 0;
+
+  if(read){
+    if((v->prot & PROT_READ) == 0)
+      return 0;
+  } else {
+    if((v->prot & PROT_WRITE) == 0)
+      return 0;
+  }
+
   mem = (uint64) kalloc();
   if(mem == 0)
     return 0;
-  memset((void *) mem, 0, PGSIZE);
-  if (mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0) {
+  memset((void *)mem, 0, PGSIZE);
+
+  uint64 off = v->offset + (va - v->addr);
+
+  ilock(v->file->ip);
+  int n = readi(v->file->ip, 0, mem, off, PGSIZE);
+  iunlock(v->file->ip);
+
+  if(n < 0){
     kfree((void *)mem);
     return 0;
   }
+
+  int perm = PTE_U;
+  if(v->prot & PROT_READ)
+    perm |= PTE_R;
+  if(v->prot & PROT_WRITE)
+    perm |= PTE_W | PTE_R;
+  if(v->prot & PROT_EXEC)
+    perm |= PTE_X;
+
+  if(mappages(pagetable, va, PGSIZE, mem, perm) != 0){
+    kfree((void *)mem);
+    return 0;
+  }
+
   return mem;
 }
 

@@ -125,6 +125,11 @@ found:
   p->pid = allocpid();
   p->state = USED;
 
+  for(int i = 0; i < NVMA; i++){
+    p->vmas[i].used = 0;
+    p->vmas[i].file = 0;
+  }
+
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -169,6 +174,10 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  for(int i = 0; i < NVMA; i++){
+    p->vmas[i].used = 0;
+    p->vmas[i].file = 0;
+  }
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -285,6 +294,16 @@ kfork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  for(i = 0; i < NVMA; i++){
+    if(p->vmas[i].used){
+      np->vmas[i] = p->vmas[i];
+      np->vmas[i].file = filedup(p->vmas[i].file);
+    } else {
+      np->vmas[i].used = 0;
+      np->vmas[i].file = 0;
+    }
+  }
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -330,6 +349,10 @@ kexit(int status)
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
+    for(int i = 0; i < NVMA; i++){
+      if(p->vmas[i].used)
+        mmap_unmap(p->vmas[i].addr, p->vmas[i].len);
+    }
     if(p->ofile[fd]){
       struct file *f = p->ofile[fd];
       fileclose(f);

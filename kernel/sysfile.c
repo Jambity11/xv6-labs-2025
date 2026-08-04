@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -502,4 +503,177 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+// static struct vma*
+// find_vma(struct proc *p, uint64 addr)
+// {
+//   for(int i = 0; i < NVMA; i++){
+//     struct vma *v = &p->vmas[i];
+//     if(v->used && addr >= v->addr && addr < v->addr + v->len)
+//       return v;
+//   }
+//   return 0;
+// }
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr;
+  int len, prot, flags, fd, offset;
+  struct file *f;
+  struct proc *p = myproc();
+  struct vma *v = 0;
+
+  argaddr(0, &addr);
+  argint(1, &len);
+  argint(2, &prot);
+  argint(3, &flags);
+  argint(5, &offset);
+
+  if(argfd(4, &fd, &f) < 0)
+    return -1;
+
+  if(addr != 0)
+    return -1;
+  if(len <= 0)
+    return -1;
+  if(offset != 0)
+    return -1;
+
+  if((prot & PROT_READ) && !f->readable)
+    return -1;
+
+  if((flags & MAP_SHARED) && (prot & PROT_WRITE) && !f->writable)
+    return -1;
+
+  if((flags & (MAP_SHARED | MAP_PRIVATE)) == 0)
+    return -1;
+
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used == 0){
+      v = &p->vmas[i];
+      break;
+    }
+  }
+
+  if(v == 0)
+    return -1;
+
+  uint64 maplen = PGROUNDUP(len);
+
+  uint64 top = TRAPFRAME;
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used && p->vmas[i].addr < top)
+      top = p->vmas[i].addr;
+  }
+
+  uint64 va = top - maplen;
+  if(va < p->sz)
+    return -1;
+
+  v->used = 1;
+  v->addr = va;
+  v->len = maplen;
+  v->prot = prot;
+  v->flags = flags;
+  v->offset = offset;
+  v->file = filedup(f);
+
+  return va;
+}
+
+static int
+do_munmap(uint64 addr, uint64 len)
+{
+  struct proc *p = myproc();
+  struct vma *v = 0;
+
+  if(len == 0)
+    return -1;
+
+  addr = PGROUNDDOWN(addr);
+  len = PGROUNDUP(len);
+
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].used &&
+       addr >= p->vmas[i].addr &&
+       addr < p->vmas[i].addr + p->vmas[i].len){
+      v = &p->vmas[i];
+      break;
+    }
+  }
+
+  if(v == 0)
+    return 0;
+
+  uint64 end = addr + len;
+  uint64 vend = v->addr + v->len;
+
+  if(end > vend)
+    end = vend;
+
+  for(uint64 a = addr; a < end; a += PGSIZE){
+    pte_t *pte = walk(p->pagetable, a, 0);
+    if(pte && (*pte & PTE_V)){
+      if(v->flags & MAP_SHARED){
+        uint64 fileoff = v->offset + (a - v->addr);
+        uint n = PGSIZE;
+
+        ilock(v->file->ip);
+        if(fileoff < v->file->ip->size){
+          if(fileoff + n > v->file->ip->size)
+            n = v->file->ip->size - fileoff;
+
+          iunlock(v->file->ip);
+
+          begin_op();
+          ilock(v->file->ip);
+          writei(v->file->ip, 1, a, fileoff, n);
+          iunlock(v->file->ip);
+          end_op();
+        } else {
+          iunlock(v->file->ip);
+        }
+      }
+
+      uvmunmap(p->pagetable, a, 1, 1);
+    }
+  }
+
+  if(addr == v->addr && end == vend){
+    fileclose(v->file);
+    v->used = 0;
+    v->file = 0;
+  } else if(addr == v->addr){
+    v->addr = end;
+    v->offset += end - addr;
+    v->len = vend - end;
+  } else if(end == vend){
+    v->len = addr - v->addr;
+  } else {
+    return -1;
+  }
+
+  return 0;
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  int len;
+
+  argaddr(0, &addr);
+  argint(1, &len);
+
+  if(do_munmap(addr, len) < 0)
+    return -1;
+  return 0;
+}
+
+int
+mmap_unmap(uint64 addr, uint64 len)
+{
+  return do_munmap(addr, len);
 }

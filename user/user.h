@@ -44,6 +44,12 @@ void kpgtbl(void);
 int rwlktest(void);
 int cpupin(int);
 #endif
+#ifdef LAB_MMAP
+void* mmap(void*, size_t, int, int, int, off_t);
+int munmap(void*, size_t);
+#endif
+
+
 
 // ulib.c
 int stat(const char*, struct stat*);

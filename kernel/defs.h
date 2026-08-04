@@ -192,6 +192,8 @@ void            vmprint(pagetable_t);
 #ifdef LAB_PGTBL
 pte_t*          pgpte(pagetable_t, uint64);
 #endif
+int mmap_unmap(uint64, uint64);
+
 
 // plic.c
 void            plicinit(void);
