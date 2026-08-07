@@ -16,3 +16,5 @@ kernel/kernel
 user/usys.S
 .gdbinit
 TAGS
+
+book-riscv-rev5.pdf
