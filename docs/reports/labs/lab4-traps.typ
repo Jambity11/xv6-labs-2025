@@ -42,6 +42,61 @@
 
 这个任务代码不多，但它把「函数调用在栈上留了什么」这件事彻底落实了：每层调用留两个信息（返回地址、上一层栈帧），回溯就是不断读这两个信息。
 
+#part("代码解读")
+
+本任务的实现见 #link("https://github.com/Jambity11/xv6-labs-2025/blob/traps/kernel/riscv.h")[kernel/riscv.h] 和 #link("https://github.com/Jambity11/xv6-labs-2025/blob/traps/kernel/printf.c")[kernel/printf.c]。
+
+先看 `r_fp()`——读取 frame pointer：
+
+```c
+static inline uint64
+r_fp()
+{
+  uint64 x;
+  asm volatile("mv %0, s0" : "=r" (x) );
+  return x;
+}
+```
+
+再看 `backtrace()`：
+
+```c
+backtrace(void)
+{
+  uint64 fp = r_fp(); // 读取当前函数的frame pointer
+
+  uint64 bottom = PGROUNDDOWN(fp);
+  uint64 top = PGROUNDUP(fp);
+
+  printf("backtrace:\n");
+
+  while(fp >= bottom && fp < top){
+    printf("%p\n", (void *)*(uint64 *)(fp - 8)); // fp - 8 是返回地址
+    fp = *(uint64 *)(fp - 16); // fp - 16 是调用者的 fp
+  }
+}
+```
+
+下面解释每段代码在做什么、为什么这么写。
+
+*`r_fp`。*xv6 用 `s0` 寄存器当 frame pointer（fp）。C 代码没法直接读寄存器，所以用内联汇编 `asm volatile("mv %0, s0" ...)` 把 `s0` 的值搬到 C 变量里。这就是 `r_fp()` 的全部工作——它让 C 代码能拿到「当前函数栈帧的地址」。
+
+*`backtrace` 的循环。*核心是两条规则：`fp - 8` 存当前函数的返回地址，`fp - 16` 存上一层函数的 fp。所以循环体就是「打印 `fp - 8` 处的返回地址，然后把 `fp` 更新为 `fp - 16` 处的上一层 fp」——一轮打印一层，顺着 fp 链一路往上回溯出整个调用链。
+
+*终止条件。*`while(fp >= bottom && fp < top)`——`bottom`/`top` 是当前 fp 所在内存页的上下边界。为什么不能用「fp == 0」作为结束条件？因为内核栈只占一页，如果 fp 链意外走出了这一页，继续读 `fp - 8` 就会读到栈页之外的内存，可能是垃圾、也可能再次触发异常。所以先算出当前栈页的边界，每轮检查 fp 还在不在页内，既保证能回溯完、又保证不越界。
+
+*打印出来的是地址。*`backtrace` 只打印返回地址（内核虚拟地址），不打印函数名——它不需要知道每个函数叫什么。要得到「源文件和行号」，得把打印出的地址交给 `addr2line -e kernel/kernel`，由它根据调试信息把地址翻译成源码位置。
+
+#part("自测与解答")
+
+*问：回溯循环为什么不能用「fp 是否为 0」当终止条件？*
+
+*答：*内核栈只占一页，fp 链如果因为栈损坏或边界错误走出了这一页，继续读 `fp - 8` 就会越界访问，读到垃圾甚至触发新的异常。先算出当前栈页的上下边界、每轮检查 fp 是否还在页内，才能保证既回溯完整、又不越界。
+
+*问：为什么 `backtrace` 打印的是地址而不是函数名？*
+
+*答：*因为内核自己不需要、也没有机制去解析「地址对应哪个函数」。回溯只需要按 fp 链把返回地址一个个读出来；把地址翻译成源文件和行号，是 `addr2line` 借助调试信息做的离线工作。这种「内核只负责吐出地址、外部工具负责翻译」的分工，让内核代码保持简单。
+
 == Alarm (hard)
 
 第三个任务把 trap 现场从「只能看」变成「可以改」。要求是：用户程序调用 `sigalarm(interval, handler)` 后，进程每累计运行 `interval` 个时钟 tick，内核就让它执行一次用户态 `handler`；handler 调用 `sigreturn()` 后，程序继续从中断前的位置往下跑，寄存器值保持不变。
@@ -60,6 +115,123 @@
 ```
 
 实现中我踩到两个典型问题。一个是重入：handler 执行期间若又累计到 interval、再次改 `epc` 保存现场，第二次会把第一次的备份覆盖掉，就再也回不去了。所以要在进程里加一个「handler 正在执行」的标志，期间不再触发。另一个是 `a0`：普通系统调用会把返回值写回用户态 `a0`，而 `sigreturn()` 恢复现场时若直接返回固定值，`a0` 会被分发代码覆盖，导致「寄存器保持不变」的测试失败——正确做法是让 `sys_sigreturn()` 返回原现场里保存的 `a0`。这两个问题都指向同一件事：改 trap 返回路径时，得想清楚系统调用框架接下来还会对寄存器做什么。
+
+#part("代码解读")
+
+本任务的代码改动分布在四个文件里，完整改动见仓库：
+
+#link("https://github.com/Jambity11/xv6-labs-2025/blob/traps/kernel/proc.h")[kernel/proc.h]
+#link("https://github.com/Jambity11/xv6-labs-2025/blob/traps/kernel/sysproc.c")[kernel/sysproc.c]
+#link("https://github.com/Jambity11/xv6-labs-2025/blob/traps/kernel/trap.c")[kernel/trap.c]
+#link("https://github.com/Jambity11/xv6-labs-2025/blob/traps/kernel/proc.c")[kernel/proc.c]
+
+核心代码集中如下。
+
+`kernel/proc.h` 里 `struct proc` 新增的 alarm 字段：
+
+```c
+  int alarm_interval; // 用户设置的间隔
+  int alarm_ticks;    // 当前累计了多少个 timer tick
+  uint64 alarm_handler;  // 用户注册的 handler 地址
+  int alarm_active;      // 当前是否已经在执行 alarm handler
+  struct trapframe *alarm_trapframe;  // 保存被 alarm 打断前的 trapframe 副本
+```
+
+`kernel/sysproc.c` 里的两个系统调用：
+
+```c
+sys_sigalarm(void)
+{
+  int interval;
+  uint64 handler;
+  struct proc *p = myproc();
+
+  argint(0, &interval);
+  argaddr(1, &handler);
+
+  p->alarm_interval = interval;
+  p->alarm_handler = handler;
+  p->alarm_ticks = 0;
+  p->alarm_active = 0;
+
+  return 0;
+}
+```
+
+```c
+sys_sigreturn(void)
+{
+  struct proc *p = myproc();
+  uint64 a0 = p->alarm_trapframe->a0;
+
+  memmove(p->trapframe, p->alarm_trapframe, sizeof(struct trapframe));
+  p->alarm_active = 0;
+
+  return a0;
+}
+```
+
+`kernel/trap.c` 的 `usertrap()` 里，时钟中断时检查 alarm：
+
+```c
+  // give up the CPU if this is a timer interrupt.
+  if(which_dev == 2){
+    if(p->alarm_interval > 0 && p->alarm_active == 0){
+      p->alarm_ticks++;
+      if(p->alarm_ticks >= p->alarm_interval){
+        p->alarm_ticks = 0;
+        p->alarm_active = 1;
+        memmove(p->alarm_trapframe, p->trapframe, sizeof(struct trapframe));
+        p->trapframe->epc = p->alarm_handler;
+      }
+    }
+    yield();
+  }
+```
+
+`kernel/proc.c` 里 `allocproc()` 分配备份 trapframe、`freeproc()` 释放：
+
+```c
+  // allocate a alarm_trapframe
+  if((p->alarm_trapframe = (struct trapframe *)kalloc()) == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+```
+
+```c
+  // alarm
+  if(p->alarm_trapframe)
+    kfree((void*)p->alarm_trapframe);
+  p->alarm_trapframe = 0;
+```
+
+下面逐段解释这些代码在做什么、为什么这么写。
+
+*进程结构里的五个字段。*`alarm_interval`/`alarm_handler` 记用户注册的间隔和回调地址；`alarm_ticks` 是累计的 tick 数；`alarm_active` 是「handler 是否正在执行」的标志（防重入）；`alarm_trapframe` 指向一块备份的 trapframe 内存，存「进入 handler 之前的完整现场」。为什么需要备份？因为触发 alarm 时要把 `trapframe->epc` 改成 handler 地址，原现场如果不先备份，handler 跑完就回不到中断点了。
+
+*`sys_sigalarm`。*就几行：读 interval 和 handler 参数，存进进程，把计数和活动标志清零。注意它不做任何「定时」相关的事——真正的定时判断在 `usertrap` 里。
+
+*`usertrap` 里的触发逻辑。*`which_dev == 2` 表示这次 trap 是时钟中断。每次时钟中断，如果进程注册了 alarm 且 handler 没在执行，就把 `alarm_ticks` 加一；达到 `alarm_interval` 就把计数清零、置 `alarm_active`、把当前 `trapframe` 完整备份到 `alarm_trapframe`、再把 `trapframe->epc` 改成 handler 地址。内核随后正常返回用户态，处理器就从 handler 开始执行——这就是「改道」的全部秘密：改 `epc` 一个字段就够。
+
+*`sys_sigreturn`。*handler 结束时调用它，把备份的 `alarm_trapframe` 原样 `memmove` 回 `trapframe`，清掉 `alarm_active`。于是用户态的 `epc`、寄存器、栈指针都恢复到被打断前的状态，系统调用返回后程序从中断点继续跑。这里有个细节：先取出原现场的 `a0`，最后 `return a0`——因为普通系统调用会把返回值写回用户态 `a0`，如果直接返回固定值，恢复后的 `a0` 会被覆盖，导致「寄存器保持不变」的测试失败。
+
+*`allocproc`/`freeproc`。*备份 trapframe 是一块独立的物理页，创建进程时 `kalloc` 分配、退出时 `kfree` 释放。这份备份不能和 `p->trapframe` 共用——后者还要被改成 handler 的入口状态，所以必须单独一块。
+
+#part("自测与解答")
+
+*问：触发 alarm 时为什么要把整个 trapframe 备份，而不是只记下 epc？*
+
+*答：*handler 执行期间会改寄存器、改栈指针，如果只记下 epc，handler 结束后那些被改掉的寄存器就恢复不回来了。只有把整个 trapframe（所有用户寄存器 + epc）完整备份，`sigreturn` 时才能原样恢复，程序才能从中断点继续跑、且寄存器值不变。
+
+*问：`alarm_active` 标志解决什么问题？*
+
+*答：*防重入。handler 执行期间如果又累计到 interval、再次备份现场并改 epc，第二次备份会覆盖第一次，之后 `sigreturn` 就回不到最初的中断点了。用 `alarm_active` 标记「handler 正在执行」，期间不再触发，`sigreturn` 时清掉，就能避免重入。
+
+*问：`sys_sigreturn` 为什么返回原现场保存的 `a0`，而不是随便返回一个值？*
+
+*答：*普通系统调用会把返回值写回用户态 `a0`。`sigreturn` 恢复现场后，如果返回固定值，这个固定值会覆盖掉刚恢复的 `a0`，导致「寄存器保持不变」的测试失败。所以要先取出原现场的 `a0`、把它作为 `sigreturn` 的返回值，恢复后的 `a0` 才不被破坏。
 
 == 实验结果
 

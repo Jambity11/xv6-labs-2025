@@ -34,6 +34,8 @@
 
 两个容易踩的点。一是必须检查 `argc`：用户漏传参数时，直接读 `argv[1]` 会访问到不存在的参数，应该打印用法、返回非零。二是改完 `user/sleep.c` 别忘了在 Makefile 的 `UPROGS` 里登记 `$U/_sleep`——漏了这一步，程序即使编译了也不会被写进 `fs.img`，在 xv6 里根本找不到这个命令。
 
+本任务的代码很简短，实现在 #link("https://github.com/Jambity11/xv6-labs-2025/blob/util/user/sleep.c")[user/sleep.c]，具体改动见仓库；核心就是上面讲的「检查 `argc` → `atoi` 转整数 → `pause()` 系统调用」。
+
 == sixfive (moderate)
 
 这个任务要求读文件、找出所有能被 5 或 6 整除的「独立十进制整数」。难的不是整除判断，而是「什么算一个独立整数」：`/6,` 里的 6 要算，`xv6` 里的 6 不能算。
@@ -42,11 +44,15 @@
 
 还有一个边界：文件末尾可能没有分隔符，循环结束后要补一次检查，否则最后一个整数会被漏掉。这个任务让我体会到，很多解析程序的本质就是「保存当前字符之前的上下文」，状态机就是干这个的。
 
+本任务的实现见 #link("https://github.com/Jambity11/xv6-labs-2025/blob/util/user/sixfive.c")[user/sixfive.c]，核心就是上面讲的 `SEP_STATE`/`NUMBER_STATE`/`INVALID_STATE` 三个状态之间的转换，具体代码在仓库里看。
+
 == memdump (easy)
 
 `memdump(fmt, data)` 按格式字符串解释一段内存。它讲的是一个很根本的道理：内存里存的只是字节，类型不是内存自带的，而是「读它的代码」决定的——同一块内存，按 `int` 读是整数，按 `char *` 读是字符串，按指针读是地址。
 
 最妙的对比是 `s` 和 `S`。`S` 表示「data 指向的位置本身就是字符串内容」；`s` 表示「data 指向的位置存的是一个地址，要先读这个地址，再按地址去找字符串」。处理完 `S` 要越过字符串本体和结尾的 `\0`，处理完 `s` 只要越过一个指针的大小。把这两者搞混，打印出来的就会是指针字节当字符、或字符字节当地址的乱码。读完每个字段后 `data` 指针的移动量必须和类型大小一致，否则后面所有字段都从错误位置开始解释。
+
+本任务的实现见 #link("https://github.com/Jambity11/xv6-labs-2025/blob/util/user/memdump.c")[user/memdump.c]，核心就是「按格式字符解释内存、读完按类型大小移动指针」，具体代码在仓库里看。
 
 == find (moderate)
 
@@ -54,11 +60,64 @@
 
 思路是：打开当前路径，`fstat` 判断类型；比较路径最后一段是否匹配目标；是目录就逐项读目录项、拼出子路径、递归进去。两个坑：一是必须跳过 `.` 和 `..`（分别指向当前目录和父目录），否则会在目录间无限循环；二是目录项只存短文件名，比较时只取路径最后一段（`./a/aa/b` 的匹配名是 `b`），子路径要由「父路径 + 斜杠 + 目录项名」拼接出来。
 
+本任务的实现见 #link("https://github.com/Jambity11/xv6-labs-2025/blob/util/user/find.c")[user/find.c]，核心就是「`fstat` 判断类型 → 比较路径最后一段 → 递归遍历目录项」这条主线，具体代码在仓库里看。
+
 == find -exec (moderate)
 
 在 `find` 基础上加 `-exec`：找到匹配后执行用户指定的命令，把匹配路径作为最后一个参数（`find . wc -exec echo hi` 找到 `./wc` 后，实际执行 `echo hi ./wc`）。
 
 这里藏着一个经典的坑：`find` 不能自己直接 `exec()`，因为 `exec` 会用新程序替换当前进程，目录搜索在第一次匹配后就停了。正确姿势是 fork-exec-wait——每次匹配 `fork` 一个子进程去 `exec`，父进程 `wait` 等它结束，然后继续遍历。这个任务第一次把「fork 保留继续跑、exec 替换、wait 收尾」这个组合用活了。要让子目录里的匹配也能执行命令，递归调用时还得把 `-exec` 的模式和参数一路传下去。
+
+#part("代码解读")
+
+本任务的实现也在 #link("https://github.com/Jambity11/xv6-labs-2025/blob/util/user/find.c")[user/find.c]，核心是 `run_match` 函数，完整代码如下：
+
+```c
+static void
+run_match(char *path, int exec_mode,
+          char **cmd_argv, int cmd_argc)
+{
+  char *args[MAXARG];
+  int i;
+  int pid;
+
+  if(!exec_mode){
+    printf("%s\n", path);
+    return;
+  }
+
+  if(cmd_argc + 2 > MAXARG){
+    fprintf(2, "find: too many arguments for -exec\n");
+    return;
+  }
+
+  for(i = 0; i < cmd_argc; i++)
+    args[i] = cmd_argv[i];
+
+  args[cmd_argc] = path;
+  args[cmd_argc + 1] = 0;
+
+  pid = fork();
+
+  if(pid < 0){
+    fprintf(2, "find: fork failed\n");
+    return;
+  }
+
+  if(pid == 0){
+    exec(args[0], args);
+
+    fprintf(2, "find: exec %s failed\n", args[0]);
+    exit(1);
+  }
+
+  wait(0);
+}
+```
+
+最值得讲的是最后这一段。`find` 找到匹配路径后，为什么不能自己直接 `exec`？因为 `exec` 会用新程序替换当前进程，`find` 自己就没了，目录搜索在第一次匹配后就停了。所以正确姿势是 `fork` 一个子进程：子进程里 `exec(args[0], args)` 去执行命令，父进程 `wait(0)` 等子进程结束、然后继续遍历。这三行 `fork`/`exec`/`wait` 把「fork 保留继续跑、exec 替换、wait 收尾」这个组合用活了，也是后面所有涉及进程执行的实验都要用的基础。
+
+前面 `for(i = 0; i < cmd_argc; i++) args[i] = cmd_argv[i];` 和 `args[cmd_argc] = path; args[cmd_argc + 1] = 0;` 是在构造 `exec` 的参数数组：先把用户给的命令参数复制过来，再把匹配路径追加为最后一个参数，最后补一个空指针结尾——这正是 `exec` 要求的 argv 格式。
 
 == 实验结果
 
