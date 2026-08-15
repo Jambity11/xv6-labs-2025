@@ -124,7 +124,6 @@ docs/reports/
 ```text
 docs/reports/labs/      # 各 Lab 报告正文
 docs/reports/assets/    # 测试截图与实验材料
-docs/reports/out/       # 报告输出文件
 ```
 
 报告内容按 Lab 和任务点组织，重点记录实验目标、关键实现路径、调试问题、测试结果以及对 xv6 内核机制的理解。
