@@ -2,34 +2,28 @@
 
 = Lab0: Environment Setup
 
-对应源码分支：#link("https://github.com/JambitX11/xv6-labs-2025/tree/riscv")[https://github.com/JambitX11/xv6-labs-2025/tree/riscv]
+对应源码分支：#link("https://github.com/Jambity11/xv6-labs-2025/tree/riscv")[https://github.com/Jambity11/xv6-labs-2025/tree/riscv]
 
-课程实验网站：https://pdos.csail.mit.edu/6.828/2025/
+xv6 是给 RISC-V 指令集写的教学操作系统，而我们手头的电脑是 x86 架构、跑着 Windows。摆在面前的第一个问题很直接：怎么让一个「给别的 CPU 写的操作系统」在我们这台机器上编译、运行、还能调试？
 
-本实验完成 xv6-labs-2025 所需开发环境的配置。整个运行环境由多层组成：Windows 提供宿主系统，WSL 中的 Ubuntu 提供 Linux 编译环境，RISC-V 交叉工具链负责生成目标程序，QEMU 模拟 RISC-V 计算机，最后由 QEMU 启动 xv6。
+这个问题是所有后续实验的前提——没有一个能随时 `make qemu` 跑起来的环境，后面谈内核、页表、锁都是空话。所以 Lab0 本身不写内核代码，它的全部意义就是搭好这条「从源码到运行」的通道。
 
-```text
-Windows
-  -> WSL 2 与 Ubuntu 24.04
-  -> RISC-V GCC、GDB、Make
-  -> QEMU 模拟 RISC-V 硬件
-  -> xv6 内核与 xv6 shell
-```
+初步想法是分层搭积木。Windows 提供最底层的宿主；在它上面装 WSL 2 和一个 Ubuntu 发行版，得到一套完整的 Linux 编译环境；再装 RISC-V 交叉工具链，把 C 源码编译成 RISC-V 指令；最后用 QEMU 模拟一台 RISC-V 机器，让 xv6 跑在这台「软件造出来的机器」上。每一层只干自己该干的事。
 
-#part("实验目的")
+#part("前置知识")
 
-本实验的目标是建立一套可以编译、运行、调试和测试 xv6 的环境，并确认 Git 分支能够正常与 GitHub 同步。完成环境配置后，后续实验只需要切换到相应源码分支，即可在 WSL 中编译并运行同一套 xv6 工程。
+*交叉编译。*我们电脑的 CPU 是 x86，编译出来的程序默认只能在 x86 上跑。要得到能在 RISC-V 上跑的程序，得用「交叉编译器」——编译器本身运行在 x86 上，但生成的机器码是 RISC-V 的。所以用 `gcc-riscv64-linux-gnu` 编出来的可执行文件，Windows 或 WSL 自己反而不能直接执行。
 
-#part("实验步骤")
+*QEMU：用软件模拟硬件。*QEMU 是一个模拟器，能用软件模拟出整套 RISC-V CPU 和外围设备。xv6 就运行在 QEMU 模拟出的这台「虚拟 RISC-V 机器」上。这也是为什么你在 xv6 里敲的命令，实际是发给 QEMU 里那个 xv6 内核，而不是发给 Windows。
 
-首先在 Windows 中启用 WSL 2，并安装 Ubuntu 24.04。xv6 的源码虽然保存在 Windows 可以访问的仓库中，但实际编译命令在 Ubuntu 终端内执行，因此可以使用课程提供的 Linux 工具链和 Makefile。
+*一次 make qemu 做了什么。*xv6 的 Makefile 会先编译内核、编译 `user/` 下的用户程序，再把它们打包进 `fs.img`（一个文件系统镜像），最后启动 QEMU 加载运行。所以你在 xv6 shell 里看到的每个命令，其实都是被编译进 `fs.img` 的用户程序。
+
+配置过程本身不复杂：启用 WSL 2、装 Ubuntu 24.04，然后安装工具链。
 
 #figure(
   image("../assets/env/wsl.png", width: 85%),
   caption: [配置 WSL 2 与 Ubuntu 24.04],
 )
-
-随后安装 Git、Make、GDB、QEMU 和 RISC-V 交叉编译工具链。这里的“交叉编译”表示编译器运行在 x86-64 的 WSL 环境中，但生成的是 RISC-V 指令，生成的程序不能由 Windows 或 WSL 直接执行，需要交给 QEMU 中的 RISC-V 虚拟机运行。
 
 ```bash
 sudo apt update
@@ -37,16 +31,8 @@ sudo apt install git build-essential gdb-multiarch qemu-system-misc \
   gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
 ```
 
-安装完成后克隆实验仓库，并使用独立分支保存不同 Lab 的源码。`util`、`syscall`、`pgtbl`、`traps` 等分支保存相应实验实现，`report` 分支只保存 Typst 报告。这样可以在不混入报告文件的情况下比较各实验分支与 `riscv` 基线的代码差异。
+装好后克隆实验仓库，用独立分支保存不同 Lab 的源码（`util`、`syscall`、`pgtbl` 等），`riscv` 作为基线。这样每次实验只需切换到对应分支，就能编译运行同一套工程，也方便用 `git diff` 对比改动。最后在源码分支执行 `make qemu`，终端出现 xv6 的 `$` 提示符，说明处理器模拟、内核启动、用户态 shell 都正常了。
 
-最后在源码分支执行 `make qemu`。Makefile 会编译内核和用户程序、生成文件系统镜像，然后启动 QEMU。终端出现 xv6 的 `$` 提示符后，说明处理器模拟、内核启动和用户态 shell 均已正常工作。执行 `make grade` 则可运行课程提供的自动测试。
+配置过程里我遇到一个版本问题：最初装的 Ubuntu 22.04 软件源里 QEMU 是 6.2，而 xv6-labs-2025 要求不低于 7.2，Makefile 的版本检查过不去。自己编译新版 QEMU 会引入一堆构建依赖，不如直接换 Ubuntu 24.04——它的软件源能直接装到满足要求的 QEMU。换发行版重装工具链后，`make qemu` 和 `make grade` 就都正常了。
 
-#part("实验中遇到的问题和解决方法")
-
-最初使用的 WSL 发行版是 Ubuntu 22.04，其软件源提供的 QEMU 版本为 6.2，而 xv6-labs-2025 要求 QEMU 版本不低于 7.2。执行构建命令时，Makefile 的版本检查因此无法通过。
-
-一种处理方法是自行编译新版 QEMU，但这会额外引入构建依赖和维护工作。本实验最终改用 Ubuntu 24.04，其软件源能够直接安装满足要求的 QEMU。重新安装 RISC-V GCC、GDB 和 QEMU 后，`make qemu` 与 `make grade` 均可正常运行。
-
-#part("实验心得")
-
-完成配置后，我明确了 xv6 并不是运行在 WSL 内核中的普通 Linux 程序。WSL 负责提供编译环境，QEMU 负责模拟硬件，xv6 才是运行在该硬件上的目标操作系统。后续在 xv6 shell 中执行的命令，也都是被编译进 `fs.img` 的 xv6 用户程序。
+这个实验最重要的是帮我建立了一个清晰的心智模型：xv6 并不是一个运行在 WSL 内核里的普通 Linux 程序。WSL 只是提供编译环境，QEMU 负责模拟硬件，xv6 才是跑在那台模拟硬件上的目标操作系统。这个「层与层」的认知，是后面所有实验的出发点。

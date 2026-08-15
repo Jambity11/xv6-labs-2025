@@ -46,7 +46,7 @@
   student_id: "",
   author: "",
   teacher: "",
-  repo: "https://github.com/JambitX11/xv6-labs-2025",
+  repo: "https://github.com/Jambity11/xv6-labs-2025",
   date: ""
 ) = {
   set document(title: report_title, author: author)
