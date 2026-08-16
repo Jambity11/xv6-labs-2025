@@ -4,12 +4,13 @@
 #include "kernel/param.h"
 #include "user/user.h"
 
+// 拿到路径最后的文件名
 static char *
 last_component(char *path)
 {
   char *p;
-
-  p = path + strlen(path);
+  // 指向字符串末尾 '\0'
+  p = path + strlen(path); 
 
   while(p > path && *(p - 1) != '/')
     p--;
@@ -17,6 +18,7 @@ last_component(char *path)
   return p;
 }
 
+// 
 static void
 run_match(char *path, int exec_mode,
           char **cmd_argv, int cmd_argc)
@@ -41,14 +43,14 @@ run_match(char *path, int exec_mode,
   args[cmd_argc] = path;
   args[cmd_argc + 1] = 0;
 
-  pid = fork();
+  pid = fork(); // 父进程返回pid，子进程返回0，这决定了下面两个分支父子进程分别走哪一条
 
   if(pid < 0){
     fprintf(2, "find: fork failed\n");
     return;
   }
 
-  if(pid == 0){
+  if(pid == 0){ // 子进程会跑这里
     exec(args[0], args);
 
     fprintf(2, "find: exec %s failed\n", args[0]);
@@ -109,7 +111,7 @@ find(char *path, char *target,
       if(strcmp(p, ".") == 0 ||
          strcmp(p, "..") == 0)
         continue;
-
+      // 递归目录里的文件
       find(buf, target,
            exec_mode, cmd_argv, cmd_argc);
     }
