@@ -18,4 +18,6 @@ user/usys.S
 TAGS
 
 book-riscv-rev5.pdf
-main.pdf
+docs/reports/main.pdf
+
+Defense/*
