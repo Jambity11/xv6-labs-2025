@@ -2,7 +2,7 @@
 
 本仓库为 MIT 6.1810 / xv6-labs-2025 课程实验的实现与实验报告整理，包含 xv6 内核源码修改、各实验测试结果以及实验报告材料。
 
-实验网站：[xv6-labs-2025](https://pdos.csail.mit.edu/6.1810/2025/labs/)
+实验网站：[xv6-labs-2025](https://pdos.csail.mit.edu/6.1810/2025/index.html)
 
 ## 项目简介
 
